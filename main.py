@@ -40,8 +40,8 @@ async def generate_unified(request: Request, req_body: TTSRequest):
             async for chunk in communicate.stream():
                 if chunk.get("type") == "audio":
                     f.write(chunk["data"])
-                # 💡 CAMBIO CLAVE: Validación ultra-tolerante si vienen datos de sincronización
-                elif chunk.get("type") == "WordBoundary" or "offset" in chunk or "text" in chunk:
+                # 💡 CAPTURA INDIVIDUAL: Extraemos el tiempo exacto de cada palabra suelta
+                elif chunk.get("type") == "WordBoundary":
                     words.append({
                         "text": chunk.get("text", ""),
                         "start": chunk.get("offset", 0) / 10000000,
@@ -50,6 +50,7 @@ async def generate_unified(request: Request, req_body: TTSRequest):
         
         vtt_lines = ["WEBVTT\n"]
         if words:
+            # 💡 CORTE CORTO: Agrupamos estrictamente de 3 en 3 palabras usando sus marcas reales
             for i in range(0, len(words), 3):
                 group = words[i:i+3]
                 if not group:
@@ -60,7 +61,7 @@ async def generate_unified(request: Request, req_body: TTSRequest):
                 vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
             total_duration = words[-1]["end"]
         else:
-            # Plan B optimizado si Microsoft no responde con tiempos en absoluto
+            # Respaldo matemático si falla la comunicación de marcas de tiempo
             palabras_limpias = req_body.input.split()
             tiempo_acumulado = 0.0
             for i in range(0, len(palabras_limpias), 3):
@@ -109,9 +110,7 @@ async def generate_subtitles(request: TTSRequest):
         communicate = edge_tts.Communicate(request.input, request.voice)
         words = []
         async for chunk in communicate.stream():
-            if chunk.get("type") == "audio":
-                pass
-            elif chunk.get("type") == "WordBoundary" or "offset" in chunk or "text" in chunk:
+            if chunk.get("type") == "WordBoundary":
                 words.append({
                     "text": chunk.get("text", ""),
                     "start": chunk.get("offset", 0) / 10000000,
