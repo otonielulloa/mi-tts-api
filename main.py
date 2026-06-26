@@ -38,16 +38,35 @@ async def generate_subtitles(request: TTSRequest):
     try:
         communicate = edge_tts.Communicate(request.input, request.voice)
         words = []
+        
+        # Consumimos el stream capturando marcas de tiempo reales
         async for chunk in communicate.stream():
-            if chunk["type"] == "WordBoundary":
+            chunk_type = chunk.get("type")
+            if chunk_type in ["WordBoundary", "word_boundary", "wordboundary"]:
                 words.append({
-                    "text": chunk["text"],
-                    "start": chunk["offset"] / 10000000,
-                    "end": (chunk["offset"] + chunk["duration"]) / 10000000
+                    "text": chunk.get("text", ""),
+                    "start": chunk.get("offset", 0) / 10000000,
+                    "end": (chunk.get("offset", 0) + chunk.get("duration", 0)) / 10000000
                 })
         
         vtt_lines = ["WEBVTT\n"]
-        # Agrupamos de a 3 palabras para un estilo TikTok dinámico
+        
+        # 💡 FILTRO DE RESPALDO: Si la librería interna no arroja marcas de tiempo reales,
+        # generamos una línea de tiempo estimada para asegurar que el video tenga subtítulos.
+        if not words:
+            palabras_limpias = request.input.split()
+            tiempo_acumulado = 0.0
+            for i in range(0, len(palabras_limpias), 3):
+                grupo = palabras_limpias[i:i+3]
+                duracion_grupo = len(grupo) * 0.38  # Estimación de 0.38s por palabra
+                start_time = format_time(tiempo_acumulado)
+                end_time = format_time(tiempo_acumulado + duracion_grupo)
+                tiempo_acumulado += duracion_grupo
+                phrase = " ".join(grupo).upper()
+                vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+            return PlainTextResponse("\n".join(vtt_lines), media_type="text/vtt")
+
+        # Si tenemos los tiempos exactos del motor, los agrupamos de a 3 estilo TikTok
         for i in range(0, len(words), 3):
             group = words[i:i+3]
             if not group:
