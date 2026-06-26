@@ -36,7 +36,6 @@ async def generate_unified(request: Request, req_body: TTSRequest):
         communicate = edge_tts.Communicate(req_body.input, req_body.voice)
         words = []
         
-        # 💡 SOLUCIÓN: Guardamos el audio real mientras capturamos los tiempos del MISMO stream
         with open(audio_filename, "wb") as f:
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
@@ -58,8 +57,8 @@ async def generate_unified(request: Request, req_body: TTSRequest):
                 end_time = format_time(group[-1]["end"])
                 phrase = " ".join([w["text"] for w in group]).upper()
                 vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+            total_duration = words[-1]["end"]
         else:
-            # Fallback matemático si el stream no responde marcas de tiempo
             palabras_limpias = req_body.input.split()
             tiempo_acumulado = 0.0
             for i in range(0, len(palabras_limpias), 3):
@@ -70,23 +69,23 @@ async def generate_unified(request: Request, req_body: TTSRequest):
                 tiempo_acumulado += duracion_grupo
                 phrase = " ".join(grupo).upper()
                 vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+            total_duration = tiempo_acumulado
 
         subtitles_text = "\n".join(vtt_lines)
-        
-        # Construye la URL de descarga usando la dirección interna/externa con la que n8n llamó a la API
         base_url = str(request.base_url)
         audio_url = f"{base_url}v1/audio/download/{audio_filename}"
         
+        # 💡 AHORA RETORNAMOS TAMBIÉN LA DURACIÓN TOTAL EN SEGUNDOS
         return JSONResponse(content={
             "audio_url": audio_url,
-            "subtitles": subtitles_text
+            "subtitles": subtitles_text,
+            "duration": total_duration
         })
     except Exception as e:
         if os.path.exists(audio_filename):
             os.remove(audio_filename)
         raise HTTPException(status_code=500, detail=str(e))
 
-# Mantener rutas antiguas por seguridad y compatibilidad de flujos
 @app.post("/v1/audio/speech")
 async def text_to_speech(request: TTSRequest):
     if not request.input:
