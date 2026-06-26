@@ -1,8 +1,9 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from pydantic import BaseModel
 import edge_tts
 import os
+import time
 
 app = FastAPI()
 
@@ -17,6 +18,75 @@ def format_time(seconds):
     millis = int(round((seconds % 1) * 1000))
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
 
+@app.get("/v1/audio/download/{filename}")
+async def download_file(filename: str):
+    if os.path.exists(filename):
+        return FileResponse(filename, media_type="audio/mpeg", filename=filename)
+    raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+@app.post("/v1/audio/generate")
+async def generate_unified(request: Request, req_body: TTSRequest):
+    if not req_body.input:
+        raise HTTPException(status_code=400, detail="Falta el texto de entrada (input)")
+    
+    timestamp = int(time.time() * 1000)
+    audio_filename = f"voice-{timestamp}.mp3"
+    
+    try:
+        communicate = edge_tts.Communicate(req_body.input, req_body.voice)
+        words = []
+        
+        # 💡 SOLUCIÓN: Guardamos el audio real mientras capturamos los tiempos del MISMO stream
+        with open(audio_filename, "wb") as f:
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    f.write(chunk["data"])
+                elif chunk["type"] in ["WordBoundary", "word_boundary", "wordboundary"]:
+                    words.append({
+                        "text": chunk.get("text", ""),
+                        "start": chunk.get("offset", 0) / 10000000,
+                        "end": (chunk.get("offset", 0) + chunk.get("duration", 0)) / 10000000
+                    })
+        
+        vtt_lines = ["WEBVTT\n"]
+        if words:
+            for i in range(0, len(words), 3):
+                group = words[i:i+3]
+                if not group:
+                    continue
+                start_time = format_time(group[0]["start"])
+                end_time = format_time(group[-1]["end"])
+                phrase = " ".join([w["text"] for w in group]).upper()
+                vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+        else:
+            # Fallback matemático si el stream no responde marcas de tiempo
+            palabras_limpias = req_body.input.split()
+            tiempo_acumulado = 0.0
+            for i in range(0, len(palabras_limpias), 3):
+                grupo = palabras_limpias[i:i+3]
+                duracion_grupo = len(grupo) * 0.38
+                start_time = format_time(tiempo_acumulado)
+                end_time = format_time(tiempo_acumulado + duracion_grupo)
+                tiempo_acumulado += duracion_grupo
+                phrase = " ".join(grupo).upper()
+                vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+
+        subtitles_text = "\n".join(vtt_lines)
+        
+        # Construye la URL de descarga usando la dirección interna/externa con la que n8n llamó a la API
+        base_url = str(request.base_url)
+        audio_url = f"{base_url}v1/audio/download/{audio_filename}"
+        
+        return JSONResponse(content={
+            "audio_url": audio_url,
+            "subtitles": subtitles_text
+        })
+    except Exception as e:
+        if os.path.exists(audio_filename):
+            os.remove(audio_filename)
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Mantener rutas antiguas por seguridad y compatibilidad de flujos
 @app.post("/v1/audio/speech")
 async def text_to_speech(request: TTSRequest):
     if not request.input:
@@ -38,44 +108,24 @@ async def generate_subtitles(request: TTSRequest):
     try:
         communicate = edge_tts.Communicate(request.input, request.voice)
         words = []
-        
-        # Consumimos el stream por completo liberando los eventos bloqueados
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
-                pass  # Crucial: Consumir el buffer de audio para que no se congele el stream
+                pass
             elif chunk["type"] in ["WordBoundary", "word_boundary", "wordboundary"]:
                 words.append({
                     "text": chunk.get("text", ""),
                     "start": chunk.get("offset", 0) / 10000000,
                     "end": (chunk.get("offset", 0) + chunk.get("duration", 0)) / 10000000
                 })
-        
         vtt_lines = ["WEBVTT\n"]
-        
-        # Si capturamos los tiempos reales del motor, los agrupamos de a 3 estilo TikTok
-        if words:
-            for i in range(0, len(words), 3):
-                group = words[i:i+3]
-                if not group:
-                    continue
-                start_time = format_time(group[0]["start"])
-                end_time = format_time(group[-1]["end"])
-                phrase = " ".join([w["text"] for w in group]).upper()
-                vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
-            return PlainTextResponse("\n".join(vtt_lines), media_type="text/vtt")
-
-        # Fallback de emergencia extrema (matemático)
-        palabras_limpias = request.input.split()
-        tiempo_acumulado = 0.0
-        for i in range(0, len(palabras_limpias), 3):
-            grupo = palabras_limpias[i:i+3]
-            duracion_grupo = len(grupo) * 0.38
-            start_time = format_time(tiempo_acumulado)
-            end_time = format_time(tiempo_acumulado + duracion_grupo)
-            tiempo_acumulado += duracion_grupo
-            phrase = " ".join(grupo).upper()
+        for i in range(0, len(words), 3):
+            group = words[i:i+3]
+            if not group:
+                continue
+            start_time = format_time(group[0]["start"])
+            end_time = format_time(group[-1]["end"])
+            phrase = " ".join([w["text"] for w in group]).upper()
             vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
-        
         return PlainTextResponse("\n".join(vtt_lines), media_type="text/vtt")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
