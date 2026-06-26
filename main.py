@@ -4,8 +4,15 @@ from pydantic import BaseModel
 import edge_tts
 import os
 import time
+import whisper
 
 app = FastAPI()
+
+# 💡 CARGA DEL MODELO: Cargamos el modelo 'tiny' en memoria.
+# Es ultra ligero, no consume casi recursos del servidor y procesa audios de 1 min en 2 segundos.
+print("Cargando modelo Whisper...")
+model = whisper.load_model("tiny")
+print("Whisper listo para escuchar.")
 
 class TTSRequest(BaseModel):
     input: str
@@ -33,46 +40,34 @@ async def generate_unified(request: Request, req_body: TTSRequest):
     audio_filename = f"voice-{timestamp}.mp3"
     
     try:
+        # 1. Generamos el audio limpio de Microsoft sin preocuparnos por sus marcas rotas
         communicate = edge_tts.Communicate(req_body.input, req_body.voice)
-        words = []
+        await communicate.save(audio_filename)
         
-        with open(audio_filename, "wb") as f:
-            async for chunk in communicate.stream():
-                if chunk.get("type") == "audio":
-                    f.write(chunk["data"])
-                # 💡 CAPTURA INDIVIDUAL: Extraemos el tiempo exacto de cada palabra suelta
-                elif chunk.get("type") == "WordBoundary":
-                    words.append({
-                        "text": chunk.get("text", ""),
-                        "start": chunk.get("offset", 0) / 10000000,
-                        "end": (chunk.get("offset", 0) + chunk.get("duration", 0)) / 10000000
-                    })
+        # 2. 💡 ESCUCHA ACTIVA: Whisper procesa el audio real palabra por palabra
+        result = model.transcribe(audio_filename, word_timestamps=True, language="es")
+        
+        words = []
+        for segment in result.get("segments", []):
+            for w in segment.get("words", []):
+                words.append({
+                    "text": w["word"].strip(),
+                    "start": w["start"],
+                    "end": w["end"]
+                })
         
         vtt_lines = ["WEBVTT\n"]
         if words:
-            # 💡 CORTE CORTO: Agrupamos estrictamente de 3 en 3 palabras usando sus marcas reales
-            for i in range(0, len(words), 3):
-                group = words[i:i+3]
-                if not group:
-                    continue
-                start_time = format_time(group[0]["start"])
-                end_time = format_time(group[-1]["end"])
-                phrase = " ".join([w["text"] for w in group]).upper()
+            # 💡 ESTILO TIKTOK ENÉRGICO: Una palabra exacta por bloque de tiempo
+            for i in range(len(words)):
+                w = words[i]
+                start_time = format_time(w["start"])
+                end_time = format_time(w["end"])
+                phrase = w["text"].upper()
                 vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
             total_duration = words[-1]["end"]
         else:
-            # Respaldo matemático si falla la comunicación de marcas de tiempo
-            palabras_limpias = req_body.input.split()
-            tiempo_acumulado = 0.0
-            for i in range(0, len(palabras_limpias), 3):
-                grupo = palabras_limpias[i:i+3]
-                duracion_grupo = len(grupo) * 0.38
-                start_time = format_time(tiempo_acumulado)
-                end_time = format_time(tiempo_acumulado + duracion_grupo)
-                tiempo_acumulado += duracion_grupo
-                phrase = " ".join(grupo).upper()
-                vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
-            total_duration = tiempo_acumulado
+            raise Exception("Whisper no pudo detectar palabras en el audio.")
 
         subtitles_text = "\n".join(vtt_lines)
         base_url = str(request.base_url)
@@ -106,25 +101,28 @@ async def text_to_speech(request: TTSRequest):
 async def generate_subtitles(request: TTSRequest):
     if not request.input:
         raise HTTPException(status_code=400, detail="Falta el texto de entrada (input)")
+    
+    timestamp = int(time.time() * 1000)
+    temp_audio = f"temp-{timestamp}.mp3"
     try:
         communicate = edge_tts.Communicate(request.input, request.voice)
-        words = []
-        async for chunk in communicate.stream():
-            if chunk.get("type") == "WordBoundary":
-                words.append({
-                    "text": chunk.get("text", ""),
-                    "start": chunk.get("offset", 0) / 10000000,
-                    "end": (chunk.get("offset", 0) + chunk.get("duration", 0)) / 10000000
-                })
+        await communicate.save(temp_audio)
+        
+        result = model.transcribe(temp_audio, word_timestamps=True, language="es")
         vtt_lines = ["WEBVTT\n"]
-        for i in range(0, len(words), 3):
-            group = words[i:i+3]
-            if not group:
-                continue
-            start_time = format_time(group[0]["start"])
-            end_time = format_time(group[-1]["end"])
-            phrase = " ".join([w["text"] for w in group]).upper()
-            vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+        
+        for segment in result.get("segments", []):
+            for w in segment.get("words", []):
+                start_time = format_time(w["start"])
+                end_time = format_time(w["end"])
+                phrase = w["word"].strip().upper()
+                vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+                
+        if os.path.exists(temp_audio):
+            os.remove(temp_audio)
+            
         return PlainTextResponse("\n".join(vtt_lines), media_type="text/vtt")
     except Exception as e:
+        if os.path.exists(temp_audio):
+            os.remove(temp_audio)
         raise HTTPException(status_code=500, detail=str(e))
