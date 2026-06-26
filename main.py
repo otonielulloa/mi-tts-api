@@ -8,8 +8,6 @@ import whisper
 
 app = FastAPI()
 
-# 💡 CARGA DEL MODELO: Cargamos el modelo 'tiny' en memoria.
-# Es ultra ligero, no consume casi recursos del servidor y procesa audios de 1 min en 2 segundos.
 print("Cargando modelo Whisper...")
 model = whisper.load_model("tiny")
 print("Whisper listo para escuchar.")
@@ -40,11 +38,9 @@ async def generate_unified(request: Request, req_body: TTSRequest):
     audio_filename = f"voice-{timestamp}.mp3"
     
     try:
-        # 1. Generamos el audio limpio de Microsoft sin preocuparnos por sus marcas rotas
         communicate = edge_tts.Communicate(req_body.input, req_body.voice)
         await communicate.save(audio_filename)
         
-        # 2. 💡 ESCUCHA ACTIVA: Whisper procesa el audio real palabra por palabra
         result = model.transcribe(audio_filename, word_timestamps=True, language="es")
         
         words = []
@@ -58,13 +54,34 @@ async def generate_unified(request: Request, req_body: TTSRequest):
         
         vtt_lines = ["WEBVTT\n"]
         if words:
-            # 💡 ESTILO TIKTOK ENÉRGICO: Una palabra exacta por bloque de tiempo
-            for i in range(len(words)):
-                w = words[i]
-                start_time = format_time(w["start"])
-                end_time = format_time(w["end"])
-                phrase = w["text"].upper()
-                vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+            # 💡 LÓGICA TIKTOK: Agrupamos en fragmentos de máximo 3 palabras
+            chunk_size = 3
+            for i in range(0, len(words), chunk_size):
+                chunk = words[i:i+chunk_size]
+                
+                # Creamos un evento de tiempo por cada palabra activa dentro del grupo
+                for idx in range(len(chunk)):
+                    start_time = format_time(chunk[idx]["start"])
+                    
+                    # Para evitar parpadeos, el bloque se queda hasta que empiece la siguiente palabra
+                    if idx < len(chunk) - 1:
+                        end_time = format_time(chunk[idx+1]["start"])
+                    else:
+                        end_time = format_time(chunk[idx]["end"])
+                    
+                    processed_words = []
+                    for j, w in enumerate(chunk):
+                        word_text = w["text"].upper()
+                        if j == idx:
+                            # Palabra activa: Se pinta en Amarillo (\c&H00FFFF&) y vuelve a blanco (\c&HFFFFFF&)
+                            processed_words.append(f"{{\\c&H00FFFF&}}{word_text}{{\\c&HFFFFFF&}}")
+                        else:
+                            # Palabras inactivas permanecen en su color base
+                            processed_words.append(word_text)
+                    
+                    phrase = " ".join(processed_words)
+                    vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+                    
             total_duration = words[-1]["end"]
         else:
             raise Exception("Whisper no pudo detectar palabras en el audio.")
@@ -111,13 +128,32 @@ async def generate_subtitles(request: TTSRequest):
         result = model.transcribe(temp_audio, word_timestamps=True, language="es")
         vtt_lines = ["WEBVTT\n"]
         
+        words = []
         for segment in result.get("segments", []):
             for w in segment.get("words", []):
-                start_time = format_time(w["start"])
-                end_time = format_time(w["end"])
-                phrase = w["word"].strip().upper()
-                vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+                words.append({"text": w["word"].strip(), "start": w["start"], "end": w["end"]})
                 
+        if words:
+            chunk_size = 3
+            for i in range(0, len(words), chunk_size):
+                chunk = words[i:i+chunk_size]
+                for idx in range(len(chunk)):
+                    start_time = format_time(chunk[idx]["start"])
+                    if idx < len(chunk) - 1:
+                        end_time = format_time(chunk[idx+1]["start"])
+                    else:
+                        end_time = format_time(chunk[idx]["end"])
+                    
+                    processed_words = []
+                    for j, w in enumerate(chunk):
+                        word_text = w["text"].upper()
+                        if j == idx:
+                            processed_words.append(f"{{\\c&H00FFFF&}}{word_text}{{\\c&HFFFFFF&}}")
+                        else:
+                            processed_words.append(word_text)
+                    phrase = " ".join(processed_words)
+                    vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+                    
         if os.path.exists(temp_audio):
             os.remove(temp_audio)
             
