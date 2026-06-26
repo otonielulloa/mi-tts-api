@@ -38,9 +38,10 @@ async def generate_unified(request: Request, req_body: TTSRequest):
         
         with open(audio_filename, "wb") as f:
             async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
+                if chunk.get("type") == "audio":
                     f.write(chunk["data"])
-                elif chunk["type"] in ["WordBoundary", "word_boundary", "wordboundary"]:
+                # 💡 CAMBIO CLAVE: Validación ultra-tolerante si vienen datos de sincronización
+                elif chunk.get("type") == "WordBoundary" or "offset" in chunk or "text" in chunk:
                     words.append({
                         "text": chunk.get("text", ""),
                         "start": chunk.get("offset", 0) / 10000000,
@@ -59,6 +60,7 @@ async def generate_unified(request: Request, req_body: TTSRequest):
                 vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
             total_duration = words[-1]["end"]
         else:
+            # Plan B optimizado si Microsoft no responde con tiempos en absoluto
             palabras_limpias = req_body.input.split()
             tiempo_acumulado = 0.0
             for i in range(0, len(palabras_limpias), 3):
@@ -75,7 +77,6 @@ async def generate_unified(request: Request, req_body: TTSRequest):
         base_url = str(request.base_url)
         audio_url = f"{base_url}v1/audio/download/{audio_filename}"
         
-        # 💡 AHORA RETORNAMOS TAMBIÉN LA DURACIÓN TOTAL EN SEGUNDOS
         return JSONResponse(content={
             "audio_url": audio_url,
             "subtitles": subtitles_text,
@@ -108,9 +109,9 @@ async def generate_subtitles(request: TTSRequest):
         communicate = edge_tts.Communicate(request.input, request.voice)
         words = []
         async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
+            if chunk.get("type") == "audio":
                 pass
-            elif chunk["type"] in ["WordBoundary", "word_boundary", "wordboundary"]:
+            elif chunk.get("type") == "WordBoundary" or "offset" in chunk or "text" in chunk:
                 words.append({
                     "text": chunk.get("text", ""),
                     "start": chunk.get("offset", 0) / 10000000,
