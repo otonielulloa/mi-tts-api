@@ -8,9 +8,11 @@ import whisper
 
 app = FastAPI()
 
-print("Cargando modelo Whisper Pro...")
+# 💡 CARGA DEL MODELO: Cargamos el modelo 'tiny' en memoria.
+# Es ultra ligero, no consume casi recursos del servidor y procesa audios de 1 min en 2 segundos.
+print("Cargando modelo Whisper...")
 model = whisper.load_model("tiny")
-print("Whisper listo para el resaltado dinámico.")
+print("Whisper listo para escuchar.")
 
 class TTSRequest(BaseModel):
     input: str
@@ -29,44 +31,6 @@ async def download_file(filename: str):
         return FileResponse(filename, media_type="audio/mpeg", filename=filename)
     raise HTTPException(status_code=404, detail="Archivo no encontrado")
 
-def generar_vtt_resaltado(words):
-    """
-    💡 ALGORITMO DE RESALTADO ESTILO TIKTOK:
-    Agrupa de 3 en 3 palabras, pero genera un evento por cada palabra individual
-    para pintarla de amarillo brillante (#FFFF00) mientras se pronuncia.
-    """
-    vtt_lines = ["WEBVTT\n"]
-    
-    # Agrupamos los índices de 3 en 3
-    for i in range(0, len(words), 3):
-        group = words[i:i+3]
-        if not group:
-            continue
-        
-        # Para cada palabra dentro de este grupo de 3, creamos un bloque de tiempo exclusivo
-        for target_index in range(len(group)):
-            word_actual = group[target_index]
-            
-            # El tiempo de este cuadro de animación corresponde a la palabra activa
-            start_time = format_time(word_actual["start"])
-            end_time = format_time(word_actual["end"])
-            
-            # Construimos la frase formateando con color la palabra que está sonando
-            frase_formateada = []
-            for idx, w in enumerate(group):
-                word_text = w["text"].upper()
-                if idx == target_index:
-                    # Pintamos de amarillo la palabra activa
-                    frase_formateada.append(f"<font color=\"#FFFF00\">{word_text}</font>")
-                else:
-                    # Las palabras compañeras se quedan en blanco normal
-                    frase_formateada.append(f"<font color=\"#FFFFFF\">{word_text}</font>")
-            
-            texto_final = " ".join(frase_formateada)
-            vtt_lines.append(f"{start_time} --> {end_time}\n{texto_final}\n")
-            
-    return "\n".join(vtt_lines)
-
 @app.post("/v1/audio/generate")
 async def generate_unified(request: Request, req_body: TTSRequest):
     if not req_body.input:
@@ -76,11 +40,11 @@ async def generate_unified(request: Request, req_body: TTSRequest):
     audio_filename = f"voice-{timestamp}.mp3"
     
     try:
-        # 1. Generar audio nativo
+        # 1. Generamos el audio limpio de Microsoft sin preocuparnos por sus marcas rotas
         communicate = edge_tts.Communicate(req_body.input, req_body.voice)
         await communicate.save(audio_filename)
         
-        # 2. Transcribir con Whisper para obtener milisegundos exactos
+        # 2. 💡 ESCUCHA ACTIVA: Whisper procesa el audio real palabra por palabra
         result = model.transcribe(audio_filename, word_timestamps=True, language="es")
         
         words = []
@@ -92,12 +56,20 @@ async def generate_unified(request: Request, req_body: TTSRequest):
                     "end": w["end"]
                 })
         
+        vtt_lines = ["WEBVTT\n"]
         if words:
-            subtitles_text = generar_vtt_resaltado(words)
+            # 💡 ESTILO TIKTOK ENÉRGICO: Una palabra exacta por bloque de tiempo
+            for i in range(len(words)):
+                w = words[i]
+                start_time = format_time(w["start"])
+                end_time = format_time(w["end"])
+                phrase = w["text"].upper()
+                vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
             total_duration = words[-1]["end"]
         else:
-            raise Exception("Whisper no detectó fonemas en el audio.")
+            raise Exception("Whisper no pudo detectar palabras en el audio.")
 
+        subtitles_text = "\n".join(vtt_lines)
         base_url = str(request.base_url)
         audio_url = f"{base_url}v1/audio/download/{audio_filename}"
         
@@ -137,21 +109,19 @@ async def generate_subtitles(request: TTSRequest):
         await communicate.save(temp_audio)
         
         result = model.transcribe(temp_audio, word_timestamps=True, language="es")
-        words = []
+        vtt_lines = ["WEBVTT\n"]
+        
         for segment in result.get("segments", []):
             for w in segment.get("words", []):
-                words.append({
-                    "text": w["word"].strip(),
-                    "start": w["start"],
-                    "end": w["end"]
-                })
-        
-        subtitles_text = generar_vtt_resaltado(words)
-        
+                start_time = format_time(w["start"])
+                end_time = format_time(w["end"])
+                phrase = w["word"].strip().upper()
+                vtt_lines.append(f"{start_time} --> {end_time}\n{phrase}\n")
+                
         if os.path.exists(temp_audio):
             os.remove(temp_audio)
             
-        return PlainTextResponse(subtitles_text, media_type="text/vtt")
+        return PlainTextResponse("\n".join(vtt_lines), media_type="text/vtt")
     except Exception as e:
         if os.path.exists(temp_audio):
             os.remove(temp_audio)
