@@ -70,8 +70,8 @@ async def generate_unified(request: Request, req_body: TTSRequest):
                     for j, w in enumerate(chunk):
                         word_text = w["text"].upper()
                         if j == idx:
-                            # 💡 RESALTADO SRT: Usamos etiquetas HTML con comillas simples seguros para JSON
-                            processed_words.append(f"<font color='#FFFF00'>{word_text}</font>")
+                            # 💡 SOLUCIÓN: Usamos comillas dobles obligatorias para que FFmpeg procese el color
+                            processed_words.append(f'<font color="#FFFF00">{word_text}</font>')
                         else:
                             processed_words.append(word_text)
                     
@@ -144,7 +144,8 @@ async def generate_subtitles(request: TTSRequest):
                     for j, w in enumerate(chunk):
                         word_text = w["text"].upper()
                         if j == idx:
-                            processed_words.append(f"<font color='#FFFF00'>{word_text}</font>")
+                            # 💡 SOLUCIÓN: También corregido en el endpoint secundario de subtítulos
+                            processed_words.append(f'<font color="#FFFF00">{word_text}</font>')
                         else:
                             processed_words.append(word_text)
                     phrase = " ".join(processed_words)
