@@ -54,16 +54,13 @@ async def generate_unified(request: Request, req_body: TTSRequest):
         
         vtt_lines = ["WEBVTT\n"]
         if words:
-            # 💡 LÓGICA TIKTOK: Agrupamos en fragmentos de máximo 3 palabras
             chunk_size = 3
             for i in range(0, len(words), chunk_size):
                 chunk = words[i:i+chunk_size]
                 
-                # Creamos un evento de tiempo por cada palabra activa dentro del grupo
                 for idx in range(len(chunk)):
                     start_time = format_time(chunk[idx]["start"])
                     
-                    # Para evitar parpadeos, el bloque se queda hasta que empiece la siguiente palabra
                     if idx < len(chunk) - 1:
                         end_time = format_time(chunk[idx+1]["start"])
                     else:
@@ -73,10 +70,9 @@ async def generate_unified(request: Request, req_body: TTSRequest):
                     for j, w in enumerate(chunk):
                         word_text = w["text"].upper()
                         if j == idx:
-                            # Palabra activa: Se pinta en Amarillo (\c&H00FFFF&) y vuelve a blanco (\c&HFFFFFF&)
-                            processed_words.append(f"{{\\c&H00FFFF&}}{word_text}{{\\c&HFFFFFF&}}")
+                            # 💡 RESALTADO SRT: Usamos etiquetas HTML con comillas simples seguros para JSON
+                            processed_words.append(f"<font color='#FFFF00'>{word_text}</font>")
                         else:
-                            # Palabras inactivas permanecen en su color base
                             processed_words.append(word_text)
                     
                     phrase = " ".join(processed_words)
@@ -148,7 +144,7 @@ async def generate_subtitles(request: TTSRequest):
                     for j, w in enumerate(chunk):
                         word_text = w["text"].upper()
                         if j == idx:
-                            processed_words.append(f"{{\\c&H00FFFF&}}{word_text}{{\\c&HFFFFFF&}}")
+                            processed_words.append(f"<font color='#FFFF00'>{word_text}</font>")
                         else:
                             processed_words.append(word_text)
                     phrase = " ".join(processed_words)
