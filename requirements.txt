@@ -4,5 +4,3 @@ edge-tts
 pydantic
 faster-whisper
 torch
-kokoro-onnx
-soundfile
