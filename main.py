@@ -8,22 +8,27 @@ from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from faster_whisper import WhisperModel
-from kokoro_onnx import Kokoro  # 💡 Corregido: Se importa 'Kokoro' en lugar de 'KokoroOnnx'
+from kokoro_onnx import Kokoro  # 💡 Importación correcta
 
 app = FastAPI()
 
 print("Inicializando Motores de IA Locales...")
 
-# 💡 1. Cargamos Kokoro de forma local (aprox 350MB RAM)
+# 💡 Intentamos cargar local, si no existen los archivos, dejamos que Kokoro los descargue automáticamente
 if os.path.exists("kokoro-v0.19.onnx") and os.path.exists("voices.bin"):
-    # 💡 Corregido: Se usa la clase 'Kokoro'
     kokoro = Kokoro("kokoro-v0.19.onnx", "voices.bin")
-    print("✓ Kokoro-82M cargado con éxito.")
+    print("✓ Kokoro-82M cargado desde archivos locales.")
 else:
-    print("✗ Error: No se encontraron los archivos de modelo de Kokoro.")
-    kokoro = None
+    print("⚠ Archivos locales no encontrados. Descargando modelo automáticamente desde Hugging Face...")
+    try:
+        # Al no pasarle parámetros, descarga kokoro-v1.0.onnx y voices-v1.0.bin por defecto
+        kokoro = Kokoro() 
+        print("✓ Kokoro cargado con éxito desde el repositorio.")
+    except Exception as e:
+        print(f"✗ Error al inicializar Kokoro: {e}")
+        kokoro = None
 
-# 💡 2. Whisper en modelo 'small' con optimización para tus 2 vCPUs
+# 💡 Whisper en modelo 'small' con optimización para tus 2 vCPUs
 model = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=2)
 print("✓ Whisper Small listo para escuchar.")
 
