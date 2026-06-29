@@ -14,43 +14,44 @@ app = FastAPI()
 
 print("Inicializando Motores de IA Locales...")
 
-# Nombres de los archivos que necesita el contenedor
-MODEL_PATH = "kokoro-v0.19.onnx"
-VOICES_PATH = "voices.bin"
+# Cambiamos a los nombres de la versión v1.0 estable
+MODEL_PATH = "kokoro-v1.0.onnx"
+VOICES_PATH = "voices-v1.0.bin"
 
-# 💡 Intentamos cargar local, si no existen, los descargamos explícitamente de internet
+# 💡 Descarga automática con URLs corregidas de Hugging Face
 if not os.path.exists(MODEL_PATH) or not os.path.exists(VOICES_PATH):
     print("⚠ Archivos locales no encontrados. Descargando modelos directamente de Hugging Face...")
     try:
         import urllib.request
-        # Descarga del modelo ONNX (aprox 80MB para la v0.19)
+        
+        # Descarga del modelo ONNX v1.0
         if not os.path.exists(MODEL_PATH):
-            print("Descargando kokoro-v0.19.onnx...")
-            url_model = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v0.19.onnx"
+            print(f"Descargando {MODEL_PATH}...")
+            url_model = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v1.0.onnx"
             urllib.request.urlretrieve(url_model, MODEL_PATH)
         
-        # Descarga de las voces (aprox 300MB)
+        # Descarga de las voces v1.0
         if not os.path.exists(VOICES_PATH):
-            print("Descargando voices.bin...")
-            url_voices = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices.bin"
+            print(f"Descargando {VOICES_PATH}...")
+            url_voices = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices-v1.0.bin"
             urllib.request.urlretrieve(url_voices, VOICES_PATH)
             
         print("✓ Descarga completada con éxito.")
     except Exception as e:
         print(f"✗ Error crítico al descargar los archivos: {e}")
 
-# Inicializamos pasando los argumentos obligatorios
+# Inicializamos pasando los argumentos correctos
 try:
     if os.path.exists(MODEL_PATH) and os.path.exists(VOICES_PATH):
         kokoro = Kokoro(MODEL_PATH, VOICES_PATH)
-        print("✓ Kokoro-82M cargado e inicializado con éxito.")
+        print("✓ Kokoro-82M v1.0 inicializado con éxito.")
     else:
         kokoro = None
 except Exception as e:
     print(f"✗ Error al inicializar Kokoro: {e}")
     kokoro = None
 
-# 💡 2. Whisper en modelo 'small' con optimización para tus 2 vCPUs
+# 💡 Whisper en modelo 'small' con optimización para tus 2 vCPUs
 model = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=2)
 print("✓ Whisper Small listo para escuchar.")
 
@@ -92,30 +93,27 @@ async def generate_unified(request: Request, req_body: TTSRequest):
     audio_filename = f"voice-{timestamp}.wav"
     
     try:
-        # 💡 Segmentación inteligente por puntuación para evitar saturación de CPU y Timeout 502
+        # Segmentación por puntuación
         frases = [f.strip() for f in re.split(r'[.!?\n]+', req_body.input) if f.strip()]
         
         if not frases:
             raise HTTPException(status_code=400, detail="El texto provisto no contiene frases válidas.")
         
         audio_fragmentos = []
-        sample_rate = 24000  # Frecuencia nativa de Kokoro
+        sample_rate = 24000
         
         for frase in frases:
-            # Procesamos cada frase secuencialmente de forma asíncrona en el hilo secundario
             samples, rate = await asyncio.to_thread(
                 kokoro.create, frase, voice=req_body.voice, speed=1.0
             )
             sample_rate = rate
             audio_fragmentos.append(samples)
             
-        # Unimos todos los fragmentos matemáticamente en un solo bloque de audio
         samples_totales = np.concatenate(audio_fragmentos)
         
-        # Guardamos el archivo final en el disco NVMe
         await asyncio.to_thread(sf.write, audio_filename, samples_totales, sample_rate)
         
-        # Transcripción asíncrona usando Whisper Small
+        # Transcripción asíncrona usando Whisper
         segments, info = await asyncio.to_thread(
             model.transcribe, audio_filename, language="es", word_timestamps=True
         )
