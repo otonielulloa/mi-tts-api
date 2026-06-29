@@ -14,37 +14,45 @@ app = FastAPI()
 
 print("Inicializando Motores de IA Locales...")
 
-# Cambiamos a los nombres de la versión v1.0 estable
-MODEL_PATH = "kokoro-v1.0.onnx"
-VOICES_PATH = "voices-v1.0.bin"
+MODEL_PATH = "kokoro-v0.19.onnx"
+VOICES_PATH = "voices.bin"
 
-# 💡 Descarga automática con URLs corregidas de Hugging Face
+def download_model_file(url, dest_path):
+    """Descarga archivos grandes desde Hugging Face simulando un navegador para evitar el error 404/403"""
+    import urllib.request
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+    
+    with urllib.request.urlopen(req) as response, open(dest_path, 'wb') as out_file:
+        print(f"Iniciando descarga de {dest_path}...")
+        while True:
+            chunk = response.read(1024 * 1024)  # Descarga en fragmentos de 1MB
+            if not chunk:
+                break
+            out_file.write(chunk)
+
+# 💡 Descarga automática corregida con User-Agent
 if not os.path.exists(MODEL_PATH) or not os.path.exists(VOICES_PATH):
     print("⚠ Archivos locales no encontrados. Descargando modelos directamente de Hugging Face...")
     try:
-        import urllib.request
-        
-        # Descarga del modelo ONNX v1.0
+        # Descarga del modelo ONNX v0.19
         if not os.path.exists(MODEL_PATH):
-            print(f"Descargando {MODEL_PATH}...")
-            url_model = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v1.0.onnx"
-            urllib.request.urlretrieve(url_model, MODEL_PATH)
+            url_model = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v0.19.onnx"
+            download_model_file(url_model, MODEL_PATH)
         
-        # Descarga de las voces v1.0
+        # Descarga de las voces
         if not os.path.exists(VOICES_PATH):
-            print(f"Descargando {VOICES_PATH}...")
-            url_voices = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices-v1.0.bin"
-            urllib.request.urlretrieve(url_voices, VOICES_PATH)
+            url_voices = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices.bin"
+            download_model_file(url_voices, VOICES_PATH)
             
         print("✓ Descarga completada con éxito.")
     except Exception as e:
         print(f"✗ Error crítico al descargar los archivos: {e}")
 
-# Inicializamos pasando los argumentos correctos
+# Inicializamos Kokoro pasando los argumentos correctos
 try:
     if os.path.exists(MODEL_PATH) and os.path.exists(VOICES_PATH):
         kokoro = Kokoro(MODEL_PATH, VOICES_PATH)
-        print("✓ Kokoro-82M v1.0 inicializado con éxito.")
+        print("✓ Kokoro-82M inicializado con éxito.")
     else:
         kokoro = None
 except Exception as e:
@@ -76,7 +84,7 @@ def remove_file(path: str):
             print(f"Error al eliminar {path}: {e}")
 
 @app.get("/v1/audio/download/{filename}")
-async def download_file(filename: str, background_tasks: BackgroundTasks):
+async def download_file_endpoint(filename: str, background_tasks: BackgroundTasks):
     if os.path.exists(filename):
         background_tasks.add_task(remove_file, filename)
         return FileResponse(filename, media_type="audio/wav", filename=filename)
