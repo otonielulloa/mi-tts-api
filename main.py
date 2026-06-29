@@ -4,6 +4,7 @@ import time
 import re
 import numpy as np
 import soundfile as sf
+import subprocess  # 💡 Necesario para ejecutar curl de forma segura
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -18,19 +19,16 @@ MODEL_PATH = "kokoro-v0.19.onnx"
 VOICES_PATH = "voices.bin"
 
 def download_model_file(url, dest_path):
-    """Descarga archivos grandes desde Hugging Face simulando un navegador para evitar el error 404/403"""
-    import urllib.request
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-    
-    with urllib.request.urlopen(req) as response, open(dest_path, 'wb') as out_file:
-        print(f"Iniciando descarga de {dest_path}...")
-        while True:
-            chunk = response.read(1024 * 1024)  # Descarga en fragmentos de 1MB
-            if not chunk:
-                break
-            out_file.write(chunk)
+    """Descarga archivos usando curl (instalado en tu Dockerfile) para manejar correctamente los redireccionamientos de Hugging Face LFS"""
+    print(f"Iniciando descarga de {dest_path} vía curl...")
+    try:
+        # -L sigue las redirecciones de Hugging Face perfectamente
+        subprocess.run(["curl", "-L", "-o", dest_path, url], check=True)
+        print(f"✓ Descarga exitosa de: {dest_path}")
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Error en curl al descargar {dest_path}: {e}")
 
-# 💡 Descarga automática corregida con User-Agent
+# 💡 Descarga automática ultra robusta usando curl
 if not os.path.exists(MODEL_PATH) or not os.path.exists(VOICES_PATH):
     print("⚠ Archivos locales no encontrados. Descargando modelos directamente de Hugging Face...")
     try:
@@ -44,7 +42,7 @@ if not os.path.exists(MODEL_PATH) or not os.path.exists(VOICES_PATH):
             url_voices = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices.bin"
             download_model_file(url_voices, VOICES_PATH)
             
-        print("✓ Descarga completada con éxito.")
+        print("✓ Todos los archivos se han descargado con éxito.")
     except Exception as e:
         print(f"✗ Error crítico al descargar los archivos: {e}")
 
@@ -52,7 +50,7 @@ if not os.path.exists(MODEL_PATH) or not os.path.exists(VOICES_PATH):
 try:
     if os.path.exists(MODEL_PATH) and os.path.exists(VOICES_PATH):
         kokoro = Kokoro(MODEL_PATH, VOICES_PATH)
-        print("✓ Kokoro-82M inicializado con éxito.")
+        print("✓ Kokoro-82M inicializado con éxito y listo para n8n.")
     else:
         kokoro = None
 except Exception as e:
