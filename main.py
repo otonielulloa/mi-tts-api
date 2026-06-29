@@ -1,22 +1,32 @@
 import asyncio
 import os
 import time
+import soundfile as sf
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from pydantic import BaseModel
-import edge_tts
 from faster_whisper import WhisperModel
+from kokoro_onnx import KokoroOnnx
 
 app = FastAPI()
 
-print("Cargando modelo Faster-Whisper Medium...")
-# 💡 Configurado optimizadamente para los 2 vCPU cores de tu servidor KVM
-model = WhisperModel("medium", device="cpu", compute_type="int8", cpu_threads=2)
-print("Whisper Medium listo para escuchar.")
+print("Inicializando Motores de IA Locales...")
+
+# 💡 1. Cargamos Kokoro de forma local (usa poquísima RAM, aprox 350MB)
+if os.path.exists("kokoro-v0.19.onnx") and os.path.exists("voices.bin"):
+    kokoro = KokoroOnnx("kokoro-v0.19.onnx", "voices.bin")
+    print("✓ Kokoro-82M cargado con éxito.")
+else:
+    print("✗ Error: No se encontraron los archivos de modelo de Kokoro.")
+    kokoro = None
+
+# 💡 2. Bajamos Whisper a 'small' (optimizado en int8 para tus 2 vCPUs)
+model = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=2)
+print("✓ Whisper Small listo para escuchar.")
 
 class TTSRequest(BaseModel):
     input: str
-    voice: str = "es-MX-JorgeNeural"
+    voice: str = "am_adam"  # Voz masculina por defecto en Kokoro (Estilo Americano/Neutro)
 
 def format_time(seconds):
     hours = int(seconds // 3600)
@@ -26,35 +36,42 @@ def format_time(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
 
 def remove_file(path: str):
-    """Elimina archivos temporales de forma segura tras ser descargados"""
+    """Elimina archivos temporales de forma segura"""
     if os.path.exists(path):
         try:
             os.remove(path)
-            print(f"Archivo temporal eliminado con éxito: {path}")
+            print(f"Archivo temporal eliminado: {path}")
         except Exception as e:
-            print(f"Error al eliminar el archivo temporal {path}: {e}")
+            print(f"Error al eliminar {path}: {e}")
 
 @app.get("/v1/audio/download/{filename}")
 async def download_file(filename: str, background_tasks: BackgroundTasks):
     if os.path.exists(filename):
-        # 💡 Tarea en segundo plano: se borra el archivo justo después de enviarlo al usuario
         background_tasks.add_task(remove_file, filename)
-        return FileResponse(filename, media_type="audio/mpeg", filename=filename)
+        return FileResponse(filename, media_type="audio/wav", filename=filename)
     raise HTTPException(status_code=404, detail="Archivo no encontrado")
 
 @app.post("/v1/audio/generate")
 async def generate_unified(request: Request, req_body: TTSRequest):
     if not req_body.input:
         raise HTTPException(status_code=400, detail="Falta el texto de entrada (input)")
+    if not kokoro:
+        raise HTTPException(status_code=500, detail="El motor Kokoro no está inicializado.")
     
     timestamp = int(time.time() * 1000)
-    audio_filename = f"voice-{timestamp}.mp3"
+    audio_filename = f"voice-{timestamp}.wav" # Kokoro genera audio puro sin comprimir (.wav)
     
     try:
-        communicate = edge_tts.Communicate(req_body.input, req_body.voice)
-        await communicate.save(audio_filename)
+        # 💡 Generamos la voz de forma 100% local e híbrida asíncrona
+        # Nota: speed=1.0 es la velocidad normal. Puedes usar am_adam, af_bella, etc.
+        samples, sample_rate = await asyncio.to_thread(
+            kokoro.create, req_body.input, voice=req_body.voice, speed=1.0
+        )
         
-        # 💡 Transcripción asíncrona usando el modelo Medium en un hilo secundario
+        # Guardamos el archivo de audio usando soundfile en tu NVMe veloz
+        await asyncio.to_thread(sf.write, audio_filename, samples, sample_rate)
+        
+        # Transcripción asíncrona usando Whisper Small
         segments, info = await asyncio.to_thread(
             model.transcribe, audio_filename, language="es", word_timestamps=True
         )
@@ -74,10 +91,8 @@ async def generate_unified(request: Request, req_body: TTSRequest):
             chunk_size = 3
             for i in range(0, len(words), chunk_size):
                 chunk = words[i:i+chunk_size]
-                
                 for idx in range(len(chunk)):
                     start_time = format_time(chunk[idx]["start"])
-                    
                     if idx < len(chunk) - 1:
                         end_time = format_time(chunk[idx+1]["start"])
                     else:
@@ -96,7 +111,7 @@ async def generate_unified(request: Request, req_body: TTSRequest):
                     
             total_duration = words[-1]["end"]
         else:
-            raise Exception("Whisper no pudo detectar palabras en el audio.")
+            raise Exception("Whisper no detectó palabras en el audio local.")
 
         subtitles_text = "\n".join(vtt_lines)
         base_url = str(request.base_url)
@@ -116,13 +131,17 @@ async def generate_unified(request: Request, req_body: TTSRequest):
 async def text_to_speech(request: TTSRequest, background_tasks: BackgroundTasks):
     if not request.input:
         raise HTTPException(status_code=400, detail="Falta el texto de entrada (input)")
-    output_filename = f"audio-{os.getpid()}-{int(time.time())}.mp3"
+    if not kokoro:
+        raise HTTPException(status_code=500, detail="El motor Kokoro no está inicializado.")
+        
+    output_filename = f"audio-{os.getpid()}-{int(time.time())}.wav"
     try:
-        communicate = edge_tts.Communicate(request.input, request.voice)
-        await communicate.save(output_filename)
-        # 💡 Limpieza automática para este endpoint también
+        samples, sample_rate = await asyncio.to_thread(
+            kokoro.create, request.input, voice=request.voice, speed=1.0
+        )
+        await asyncio.to_thread(sf.write, output_filename, samples, sample_rate)
         background_tasks.add_task(remove_file, output_filename)
-        return FileResponse(output_filename, media_type="audio/mpeg", filename="voice.mp3")
+        return FileResponse(output_filename, media_type="audio/wav", filename="voice.wav")
     except Exception as e:
         if os.path.exists(output_filename):
             os.remove(output_filename)
@@ -132,14 +151,17 @@ async def text_to_speech(request: TTSRequest, background_tasks: BackgroundTasks)
 async def generate_subtitles(request: TTSRequest):
     if not request.input:
         raise HTTPException(status_code=400, detail="Falta el texto de entrada (input)")
+    if not kokoro:
+        raise HTTPException(status_code=500, detail="El motor Kokoro no está inicializado.")
     
     timestamp = int(time.time() * 1000)
-    temp_audio = f"temp-{timestamp}.mp3"
+    temp_audio = f"temp-{timestamp}.wav"
     try:
-        communicate = edge_tts.Communicate(request.input, request.voice)
-        await communicate.save(temp_audio)
+        samples, sample_rate = await asyncio.to_thread(
+            kokoro.create, request.input, voice=request.voice, speed=1.0
+        )
+        await asyncio.to_thread(sf.write, temp_audio, samples, sample_rate)
         
-        # 💡 Transcripción asíncrona con Faster-Whisper Medium
         segments, info = await asyncio.to_thread(
             model.transcribe, temp_audio, language="es", word_timestamps=True
         )
