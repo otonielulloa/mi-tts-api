@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Instalar dependencias del sistema
+# Instalar dependencias del sistema (incluyendo FFmpeg y librerías de aceleración de CPU)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
@@ -8,11 +8,6 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-# 💡 CORREGIDO: Cambiado 'print' por 'echo' para que Docker no falle
-RUN echo "Descargando modelos de Kokoro..." && \
-    curl -L -o kokoro-v0.19.onnx https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v0.19.onnx && \
-    curl -L -o voices.bin https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices.bin
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
