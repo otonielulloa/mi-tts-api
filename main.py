@@ -8,27 +8,49 @@ from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from faster_whisper import WhisperModel
-from kokoro_onnx import Kokoro  # 💡 Importación correcta
+from kokoro_onnx import Kokoro
 
 app = FastAPI()
 
 print("Inicializando Motores de IA Locales...")
 
-# 💡 Intentamos cargar local, si no existen los archivos, dejamos que Kokoro los descargue automáticamente
-if os.path.exists("kokoro-v0.19.onnx") and os.path.exists("voices.bin"):
-    kokoro = Kokoro("kokoro-v0.19.onnx", "voices.bin")
-    print("✓ Kokoro-82M cargado desde archivos locales.")
-else:
-    print("⚠ Archivos locales no encontrados. Descargando modelo automáticamente desde Hugging Face...")
-    try:
-        # Al no pasarle parámetros, descarga kokoro-v1.0.onnx y voices-v1.0.bin por defecto
-        kokoro = Kokoro() 
-        print("✓ Kokoro cargado con éxito desde el repositorio.")
-    except Exception as e:
-        print(f"✗ Error al inicializar Kokoro: {e}")
-        kokoro = None
+# Nombres de los archivos que necesita el contenedor
+MODEL_PATH = "kokoro-v0.19.onnx"
+VOICES_PATH = "voices.bin"
 
-# 💡 Whisper en modelo 'small' con optimización para tus 2 vCPUs
+# 💡 Intentamos cargar local, si no existen, los descargamos explícitamente de internet
+if not os.path.exists(MODEL_PATH) or not os.path.exists(VOICES_PATH):
+    print("⚠ Archivos locales no encontrados. Descargando modelos directamente de Hugging Face...")
+    try:
+        import urllib.request
+        # Descarga del modelo ONNX (aprox 80MB para la v0.19)
+        if not os.path.exists(MODEL_PATH):
+            print("Descargando kokoro-v0.19.onnx...")
+            url_model = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v0.19.onnx"
+            urllib.request.urlretrieve(url_model, MODEL_PATH)
+        
+        # Descarga de las voces (aprox 300MB)
+        if not os.path.exists(VOICES_PATH):
+            print("Descargando voices.bin...")
+            url_voices = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices.bin"
+            urllib.request.urlretrieve(url_voices, VOICES_PATH)
+            
+        print("✓ Descarga completada con éxito.")
+    except Exception as e:
+        print(f"✗ Error crítico al descargar los archivos: {e}")
+
+# Inicializamos pasando los argumentos obligatorios
+try:
+    if os.path.exists(MODEL_PATH) and os.path.exists(VOICES_PATH):
+        kokoro = Kokoro(MODEL_PATH, VOICES_PATH)
+        print("✓ Kokoro-82M cargado e inicializado con éxito.")
+    else:
+        kokoro = None
+except Exception as e:
+    print(f"✗ Error al inicializar Kokoro: {e}")
+    kokoro = None
+
+# 💡 2. Whisper en modelo 'small' con optimización para tus 2 vCPUs
 model = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=2)
 print("✓ Whisper Small listo para escuchar.")
 
