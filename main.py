@@ -4,7 +4,6 @@ import time
 import re
 import numpy as np
 import soundfile as sf
-import subprocess  # 💡 Necesario para ejecutar curl de forma segura
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -18,46 +17,19 @@ print("Inicializando Motores de IA Locales...")
 MODEL_PATH = "kokoro-v0.19.onnx"
 VOICES_PATH = "voices.bin"
 
-def download_model_file(url, dest_path):
-    """Descarga archivos usando curl (instalado en tu Dockerfile) para manejar correctamente los redireccionamientos de Hugging Face LFS"""
-    print(f"Iniciando descarga de {dest_path} vía curl...")
-    try:
-        # -L sigue las redirecciones de Hugging Face perfectamente
-        subprocess.run(["curl", "-L", "-o", dest_path, url], check=True)
-        print(f"✓ Descarga exitosa de: {dest_path}")
-    except subprocess.CalledProcessError as e:
-        raise Exception(f"Error en curl al descargar {dest_path}: {e}")
-
-# 💡 Descarga automática ultra robusta usando curl
-if not os.path.exists(MODEL_PATH) or not os.path.exists(VOICES_PATH):
-    print("⚠ Archivos locales no encontrados. Descargando modelos directamente de Hugging Face...")
-    try:
-        # Descarga del modelo ONNX v0.19
-        if not os.path.exists(MODEL_PATH):
-            url_model = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v0.19.onnx"
-            download_model_file(url_model, MODEL_PATH)
-        
-        # Descarga de las voces
-        if not os.path.exists(VOICES_PATH):
-            url_voices = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices.bin"
-            download_model_file(url_voices, VOICES_PATH)
-            
-        print("✓ Todos los archivos se han descargado con éxito.")
-    except Exception as e:
-        print(f"✗ Error crítico al descargar los archivos: {e}")
-
-# Inicializamos Kokoro pasando los argumentos correctos
+# 💡 Ahora la carga es directa y segura porque Docker ya guardó los archivos
 try:
     if os.path.exists(MODEL_PATH) and os.path.exists(VOICES_PATH):
         kokoro = Kokoro(MODEL_PATH, VOICES_PATH)
-        print("✓ Kokoro-82M inicializado con éxito y listo para n8n.")
+        print("✓ Kokoro-82M cargado con éxito desde la imagen interna.")
     else:
+        print("✗ Error crítico: Los archivos no se encuentran en la imagen.")
         kokoro = None
 except Exception as e:
     print(f"✗ Error al inicializar Kokoro: {e}")
     kokoro = None
 
-# 💡 Whisper en modelo 'small' con optimización para tus 2 vCPUs
+# Whisper en modelo 'small' optimizado
 model = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=2)
 print("✓ Whisper Small listo para escuchar.")
 
@@ -99,7 +71,6 @@ async def generate_unified(request: Request, req_body: TTSRequest):
     audio_filename = f"voice-{timestamp}.wav"
     
     try:
-        # Segmentación por puntuación
         frases = [f.strip() for f in re.split(r'[.!?\n]+', req_body.input) if f.strip()]
         
         if not frases:
@@ -119,7 +90,6 @@ async def generate_unified(request: Request, req_body: TTSRequest):
         
         await asyncio.to_thread(sf.write, audio_filename, samples_totales, sample_rate)
         
-        # Transcripción asíncrona usando Whisper
         segments, info = await asyncio.to_thread(
             model.transcribe, audio_filename, language="es", word_timestamps=True
         )
