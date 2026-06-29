@@ -1,9 +1,10 @@
 FROM python:3.10-slim
 
-# Instalar dependencias del sistema (incluyendo FFmpeg)
+# Instalar dependencias del sistema (incluyendo FFmpeg y librerías de aceleración de CPU)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
