@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from faster_whisper import WhisperModel
-from kokoro_onnx import KokoroOnnx
+from kokoro_onnx import Kokoro  # 💡 Corregido: Se importa 'Kokoro' en lugar de 'KokoroOnnx'
 
 app = FastAPI()
 
@@ -16,7 +16,8 @@ print("Inicializando Motores de IA Locales...")
 
 # 💡 1. Cargamos Kokoro de forma local (aprox 350MB RAM)
 if os.path.exists("kokoro-v0.19.onnx") and os.path.exists("voices.bin"):
-    kokoro = KokoroOnnx("kokoro-v0.19.onnx", "voices.bin")
+    # 💡 Corregido: Se usa la clase 'Kokoro'
+    kokoro = Kokoro("kokoro-v0.19.onnx", "voices.bin")
     print("✓ Kokoro-82M cargado con éxito.")
 else:
     print("✗ Error: No se encontraron los archivos de modelo de Kokoro.")
