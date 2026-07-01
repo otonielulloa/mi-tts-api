@@ -9,7 +9,7 @@ import whisper
 app = FastAPI()
 
 print("Cargando modelo Whisper...")
-model = whisper.load_model("small")
+model = whisper.load_model("medium")
 print("Whisper listo para escuchar.")
 
 class TTSRequest(BaseModel):
