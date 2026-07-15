@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-edge-tts
 pydantic
-openai-whisper
-torch
+edge-tts
+faster-whisper
