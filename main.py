@@ -4,12 +4,13 @@ from pydantic import BaseModel
 import edge_tts
 import os
 import time
-import whisper
+from faster_whisper import WhisperModel  # <--- Cambiado aquí
 
 app = FastAPI()
 
-print("Cargando modelo Whisper...")
-model = whisper.load_model("medium")
+print("Cargando modelo Whisper (Optimizado para CPU)...")
+# Cargamos el modelo medium optimizado para CPU con cuantización int8
+model = WhisperModel("medium", device="cpu", compute_type="int8")
 print("Whisper listo para escuchar.")
 
 class TTSRequest(BaseModel):
@@ -41,16 +42,19 @@ async def generate_unified(request: Request, req_body: TTSRequest):
         communicate = edge_tts.Communicate(req_body.input, req_body.voice)
         await communicate.save(audio_filename)
         
-        result = model.transcribe(audio_filename, word_timestamps=True, language="es")
+        # Transcripción optimizada con marcas de tiempo por palabra
+        segments, info = model.transcribe(audio_filename, word_timestamps=True, language="es")
         
         words = []
-        for segment in result.get("segments", []):
-            for w in segment.get("words", []):
-                words.append({
-                    "text": w["word"].strip(),
-                    "start": w["start"],
-                    "end": w["end"]
-                })
+        # Convertimos el generador de segmentos a una estructura limpia
+        for segment in segments:
+            if segment.words:
+                for w in segment.words:
+                    words.append({
+                        "text": w.word.strip(),
+                        "start": w.start,
+                        "end": w.end
+                    })
         
         vtt_lines = ["WEBVTT\n"]
         if words:
@@ -70,7 +74,6 @@ async def generate_unified(request: Request, req_body: TTSRequest):
                     for j, w in enumerate(chunk):
                         word_text = w["text"].upper()
                         if j == idx:
-                            # 💡 SOLUCIÓN: Usamos comillas dobles obligatorias para que FFmpeg procese el color
                             processed_words.append(f'<font color="#FFFF00">{word_text}</font>')
                         else:
                             processed_words.append(word_text)
@@ -121,13 +124,14 @@ async def generate_subtitles(request: TTSRequest):
         communicate = edge_tts.Communicate(request.input, request.voice)
         await communicate.save(temp_audio)
         
-        result = model.transcribe(temp_audio, word_timestamps=True, language="es")
+        segments, info = model.transcribe(temp_audio, word_timestamps=True, language="es")
         vtt_lines = ["WEBVTT\n"]
         
         words = []
-        for segment in result.get("segments", []):
-            for w in segment.get("words", []):
-                words.append({"text": w["word"].strip(), "start": w["start"], "end": w["end"]})
+        for segment in segments:
+            if segment.words:
+                for w in segment.words:
+                    words.append({"text": w.word.strip(), "start": w.start, "end": w.end})
                 
         if words:
             chunk_size = 3
@@ -144,7 +148,6 @@ async def generate_subtitles(request: TTSRequest):
                     for j, w in enumerate(chunk):
                         word_text = w["text"].upper()
                         if j == idx:
-                            # 💡 SOLUCIÓN: También corregido en el endpoint secundario de subtítulos
                             processed_words.append(f'<font color="#FFFF00">{word_text}</font>')
                         else:
                             processed_words.append(word_text)
